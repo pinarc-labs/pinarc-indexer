@@ -1,0 +1,36 @@
+{
+  "name": "@pinarc-labs/indexer",
+  "version": "0.1.0",
+  "description": "Reference indexer for Pinarc on Robinhood Chain: replays every protocol event from the chain into SQLite (node:sqlite), keeps an audit log of decoded events, projects tokens / trades / balances / locks / vesting, detects reorgs, and serves a small JSON API. Verify every number the app shows, on your own machine.",
+  "license": "MIT",
+  "type": "module",
+  "repository": { "type": "git", "url": "git+https://github.com/pinarc-labs/pinarc-indexer.git" },
+  "homepage": "https://docs.pinarc.io/protocol/indexer",
+  "keywords": ["pinarc", "robinhood-chain", "indexer", "sqlite", "viem", "launchpad"],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": { "pinarc-indexer": "./bin/pinarc-indexer.js" },
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist", "bin", "README.md", "LICENSE"],
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "dev": "node --import tsx/esm src/cli.ts",
+    "sync": "node bin/pinarc-indexer.js sync",
+    "serve": "node bin/pinarc-indexer.js serve"
+  },
+  "dependencies": {
+    "@pinarc-labs/robinhood-chain-kit": "file:../robinhood-chain-kit",
+    "@pinarc-labs/sdk": "file:../pinarc-sdk",
+    "viem": "^2.56.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

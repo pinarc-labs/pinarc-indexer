@@ -1,0 +1,43 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+# @pinarc-labs/robinhood-chain-kit and @pinarc-labs/sdk are consumed via file:../ until they are on npm,
+# so CI checks out the three repos side by side and builds the dependencies first. node:sqlite needs Node 24.
+defaults:
+  run:
+    working-directory: main
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: main
+      - uses: actions/checkout@v4
+        with:
+          repository: pinarc-labs/robinhood-chain-kit
+          path: robinhood-chain-kit
+      - uses: actions/checkout@v4
+        with:
+          repository: pinarc-labs/pinarc-sdk
+          path: pinarc-sdk
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: main/pnpm-lock.yaml
+      - name: Build robinhood-chain-kit
+        working-directory: robinhood-chain-kit
+        run: pnpm install --frozen-lockfile && pnpm build
+      - name: Build pinarc-sdk
+        working-directory: pinarc-sdk
+        run: pnpm install --frozen-lockfile && pnpm build
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
