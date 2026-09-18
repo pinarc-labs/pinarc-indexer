@@ -24,6 +24,13 @@ describe("sync", () => {
     const q = queries(db);
     const t = q.token(TOKEN)!;
     expect(t.token).toMatchObject({ address: TOKEN, curve: CURVE, creator: CREATOR, name: "Robin", symbol: "ROBIN", status: "live", floor_bps: 1500, bond: USDG(500).toString(), dev_buy_usdg: USDG(300).toString(), bond_status: "active", batch_settled: 1, batch_usdg: USDG(950).toString(), batch_tokens_out: tokensOut.toString(), trades: 3 });
+    // Launched and the dev-buy commit were logged before TokenCreated in the same tx and must still land
+    expect(t.token.batch_ends_at).toBe(chain.tsOf(b0) + 30);
+    expect(db.all("SELECT wallet FROM batch_commits ORDER BY block, log_index").map((r) => r.wallet)).toEqual([CREATOR, ALICE, BOB]);
+    // referral bound + paid
+    expect(db.get("SELECT referrer FROM referrers WHERE trader = ?", ALICE)).toEqual({ referrer: BOB });
+    expect(q.referrals(BOB)).toMatchObject({ total_usdg: USDG(0.2).toString() });
+    expect(t.referrals).toMatchObject({ n: 1, usdg: Number(USDG(0.2)) });
     // raised: 940.5 (batch) + 99 (buy) − 50 (sell gross = 49.5 + 0.5) = 989.5; sold: 195M + 20M − 10M = 205M
     expect(t.token.usdg_raised).toBe(USDG(989.5).toString());
     expect(t.token.tokens_sold).toBe((205_000_000n * WAD).toString());
@@ -41,7 +48,7 @@ describe("sync", () => {
     expect(BigInt(curveBal.amount) + claim + 9_000_000n * WAD + 1_000_000n * WAD).toBe(1_000_000_000n * WAD);
     expect(db.all("SELECT * FROM batch_commits")).toHaveLength(3);
     expect(db.all("SELECT * FROM batch_claims")).toHaveLength(1);
-    expect(q.stats()).toMatchObject({ tokens: 1, live: 1, events: 15, trades: 3 });
+    expect(q.stats()).toMatchObject({ tokens: 1, live: 1, events: 17, trades: 3 });
   });
 
   it("is idempotent: syncing the same range twice changes nothing, and rebuild reproduces the projection", async () => {
@@ -142,6 +149,8 @@ describe("api", () => {
     expect(t.body.holders[0].wallet).toBe(ALICE);
     expect((await get(`/tokens/${TOKEN}/candles?tf=1h`)).body.tf).toBe("1h");
     expect((await get("/events?name=Trade")).body.events).toHaveLength(2);
+    expect((await get(`/referrals/${BOB}`)).body.referees).toHaveLength(1);
+    expect((await get("/rewards")).body.rounds).toEqual([]);
     expect((await get("/tokens/0x00")).status).toBe(400);
     expect((await get("/tokens/0x00000000000000000000000000000000000a0009")).status).toBe(404);
     server.close();

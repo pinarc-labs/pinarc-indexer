@@ -1,6 +1,6 @@
 import type { Address, Hex, Log, PublicClient } from "viem";
 import { getLogsChunked, type LogsClient } from "@pinarc-labs/robinhood-chain-kit";
-import { MAINNET, createPinarcClient, decodePinarcLogs, type PinarcAddresses } from "@pinarc-labs/sdk";
+import { MAINNET, allFactories, createPinarcClient, decodePinarcLogs, type PinarcAddresses } from "@pinarc-labs/sdk";
 import type { Db } from "./db.js";
 import { applyEvent, rebuild, toStored, type StoredEvent } from "./project.js";
 
@@ -126,18 +126,21 @@ export async function sync(opts: SyncOptions): Promise<SyncResult> {
   if (fromBlock > head) return { fromBlock, toBlock: head, head, events: 0, newTokens: 0, reorgedFrom, done: true };
   const toBlock = fromBlock + maxBlocksPerRun - 1n < head ? fromBlock + maxBlocksPerRun - 1n : head;
 
-  // 1. launches in this range
-  const factoryLogs = await getLogsChunked(client, { address: addresses.factory, fromBlock, toBlock, chunkSize });
-  const created = decodePinarcLogs(factoryLogs, { factory: addresses.factory }).filter((e) => e.name === "TokenCreated");
-  const known = db.all<{ address: string; curve: string }>("SELECT address, curve FROM tokens");
-  const tokens = new Set(known.map((k) => k.address)), curves = new Set(known.map((k) => k.curve));
+  // 1. launches in this range (every factory of the deployment: v2 and, on mainnet, the v1 one it replaced)
+  const factories = allFactories(addresses);
+  const factoryLogs = await getLogsChunked(client, { address: factories, fromBlock, toBlock, chunkSize });
+  const created = decodePinarcLogs(factoryLogs, { factory: factories[0] }).filter((e) => e.name === "TokenCreated" && factories.some((f) => f.toLowerCase() === e.address.toLowerCase()));
+  const knownTokens = db.all<{ address: string; curve: string }>("SELECT address, curve FROM tokens");
+  const tokens = new Set(knownTokens.map((k) => k.address)), curves = new Set(knownTokens.map((k) => k.curve));
   for (const e of created) { tokens.add(lc(String(e.args.token))); curves.add(lc(String(e.args.curve))); }
 
   // 2. everything else: curves, tokens and the singleton contracts
-  const watch = [...curves, ...tokens, addresses.creatorBond, addresses.floorReserve, addresses.lpLocker, addresses.vestingVault].map((a) => a as Address);
+  const singletons = [addresses.creatorBond, addresses.creatorBondV1, addresses.floorReserve, addresses.lpLocker, addresses.vestingVault, addresses.feePolicy, addresses.rewardsDistributor].filter((a): a is Address => !!a);
+  const watch = [...curves, ...tokens, ...singletons].map((a) => a as Address);
   const otherLogs = watch.length ? await getLogsChunked(client, { address: watch, fromBlock, toBlock, chunkSize, onChunk: (c) => log(`logs ${c.fromBlock}-${c.toBlock}: ${c.logs}`) }) : [];
   const logs: Log[] = [...factoryLogs, ...otherLogs];
-  const decoded = decodePinarcLogs(logs, { factory: addresses.factory, bond: addresses.creatorBond, floor: addresses.floorReserve, locker: addresses.lpLocker, vault: addresses.vestingVault })
+  const known = { factory: factories[0], bond: addresses.creatorBond, floor: addresses.floorReserve, locker: addresses.lpLocker, vault: addresses.vestingVault, policy: addresses.feePolicy, rewards: addresses.rewardsDistributor };
+  const decoded = decodePinarcLogs(logs, known)
     // only Transfer/Metadata logs of *our* tokens count as `token` events (the watch list guarantees that, but keep it explicit)
     .filter((e) => e.source !== "token" || tokens.has(lc(e.address)));
 

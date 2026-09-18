@@ -5,6 +5,14 @@ import type { Db } from "./db.js";
 const ZERO = "0x0000000000000000000000000000000000000000", DEAD = "0x000000000000000000000000000000000000dead";
 const ADDR = /^0x[0-9a-f]{40}$/;
 
+/** `batch` only while the window is open; once it closed with no settlement event yet, show `live` (settlement pending). */
+function withPhase<T extends { status?: unknown; batch_ends_at?: unknown }>(row: T): T & { phase: string } {
+  const now = Math.floor(Date.now() / 1000);
+  const ends = Number(row.batch_ends_at ?? 0);
+  const phase = row.status === "batch" && ends > 0 && ends <= now ? "live" : String(row.status ?? "");
+  return { ...row, phase };
+}
+
 /** Read-model queries over the SQLite database; also used by the HTTP server. */
 export function queries(db: Db) {
   return {
@@ -20,18 +28,21 @@ export function queries(db: Db) {
     tokens(q: { status?: string; sort?: "created" | "volume" | "trades" | "last_trade"; limit?: number } = {}) {
       const order = { created: "created_block DESC", volume: "CAST(volume_usdg AS INTEGER) DESC", trades: "trades DESC", last_trade: "last_trade_at DESC" }[q.sort ?? "created"];
       const limit = Math.min(500, Math.max(1, q.limit ?? 100));
-      return q.status ? db.all("SELECT * FROM tokens WHERE status = ? ORDER BY " + order + " LIMIT ?", q.status, limit) : db.all("SELECT * FROM tokens ORDER BY " + order + " LIMIT ?", limit);
+      const rows = q.status ? db.all("SELECT * FROM tokens WHERE status = ? ORDER BY " + order + " LIMIT ?", q.status, limit) : db.all("SELECT * FROM tokens ORDER BY " + order + " LIMIT ?", limit);
+      return rows.map(withPhase);
     },
     token(address: string) {
       const a = address.toLowerCase();
-      const token = db.get("SELECT * FROM tokens WHERE address = ?", a);
-      if (!token) return null;
+      const tokenRow = db.get("SELECT * FROM tokens WHERE address = ?", a);
+      if (!tokenRow) return null;
+      const token = withPhase(tokenRow);
       const params = db.get("SELECT * FROM curve_params WHERE token = ?", a) ?? null;
       const bond = db.get("SELECT * FROM bonds WHERE token = ?", a) ?? null;
       const floor = db.get("SELECT * FROM floors WHERE token = ?", a) ?? null;
       const locks = db.all("SELECT * FROM locks WHERE for_token = ? OR token = ? ORDER BY id", a, a);
       const vesting = db.all("SELECT * FROM vesting WHERE token = ? ORDER BY id", a);
-      return { token, params, bond, floor, locks, vesting };
+      const referrals = db.get("SELECT COUNT(*) n, COALESCE(SUM(CAST(usdg AS INTEGER)), 0) usdg FROM referral_payouts WHERE token = ?", a);
+      return { token, params, bond, floor, locks, vesting, referrals };
     },
     trades(address: string, limit = 50) {
       return db.all("SELECT * FROM trades WHERE token = ? ORDER BY block DESC, log_index DESC LIMIT ?", address.toLowerCase(), Math.min(1000, limit));
@@ -54,6 +65,17 @@ export function queries(db: Db) {
       const rows = db.all<{ args: string }>(`SELECT * FROM events ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY block DESC, log_index DESC LIMIT ?`, ...params, Math.min(1000, q.limit ?? 100));
       return rows.map((r) => ({ ...r, args: JSON.parse(r.args) }));
     },
+    referrals(referrer: string) {
+      const r = referrer.toLowerCase();
+      return {
+        referees: db.all("SELECT trader, ts, tx_hash FROM referrers WHERE referrer = ? ORDER BY block", r),
+        payouts: db.all("SELECT * FROM referral_payouts WHERE referrer = ? ORDER BY block DESC, log_index DESC LIMIT 200", r),
+        total_usdg: String(db.get<{ s: string }>("SELECT COALESCE(SUM(CAST(usdg AS INTEGER)), 0) s FROM referral_payouts WHERE referrer = ?", r)!.s),
+      };
+    },
+    rewards() {
+      return db.all("SELECT * FROM reward_rounds ORDER BY CAST(id AS INTEGER) DESC");
+    },
     locks(owner?: string) {
       return owner ? db.all("SELECT * FROM locks WHERE owner = ? ORDER BY id", owner.toLowerCase()) : db.all("SELECT * FROM locks ORDER BY id DESC LIMIT 200");
     },
@@ -68,7 +90,7 @@ function json(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body, (_k, v) => (typeof v === "bigint" ? v.toString() : v)));
 }
 
-/** Minimal JSON API over the database: /health /stats /tokens /tokens/:a /tokens/:a/trades /tokens/:a/holders /tokens/:a/candles /events /locks /vesting */
+/** Minimal JSON API over the database: /health /stats /tokens /tokens/:a /tokens/:a/trades /tokens/:a/holders /tokens/:a/candles /events /locks /vesting /rewards /referrals/:wallet */
 export function createApiServer(db: Db) {
   const q = queries(db);
   return createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -80,6 +102,8 @@ export function createApiServer(db: Db) {
       if (parts[0] === "stats") return json(res, 200, q.stats());
       if (parts[0] === "events") return json(res, 200, { events: q.events({ address: url.searchParams.get("address") ?? undefined, name: url.searchParams.get("name") ?? undefined, limit: num("limit", 100) }) });
       if (parts[0] === "locks") return json(res, 200, { locks: q.locks(url.searchParams.get("owner") ?? undefined) });
+      if (parts[0] === "rewards") return json(res, 200, { rounds: q.rewards() });
+      if (parts[0] === "referrals" && parts[1] && ADDR.test(parts[1].toLowerCase())) return json(res, 200, q.referrals(parts[1]));
       if (parts[0] === "vesting") return json(res, 200, { vesting: q.vesting(url.searchParams.get("beneficiary") ?? undefined) });
       if (parts[0] === "tokens") {
         if (parts.length === 1) return json(res, 200, { tokens: q.tokens({ status: url.searchParams.get("status") ?? undefined, sort: (url.searchParams.get("sort") as never) ?? undefined, limit: num("limit", 100) }) });

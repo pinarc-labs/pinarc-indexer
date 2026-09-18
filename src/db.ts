@@ -65,6 +65,16 @@ CREATE TABLE IF NOT EXISTS curve_params (
   anti_sniper_seconds INTEGER NOT NULL, cooldown_seconds INTEGER NOT NULL, max_wallet TEXT NOT NULL, max_tx TEXT NOT NULL, max_batch_commit TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS token_meta (token TEXT PRIMARY KEY, name TEXT NOT NULL, symbol TEXT NOT NULL, metadata_uri TEXT NOT NULL, total_supply TEXT NOT NULL);
+
+-- v2: on-chain referrals (FeePolicy.ReferrerBound) and their payouts (BondingCurve.ReferralPaid), reward rounds and claims.
+CREATE TABLE IF NOT EXISTS referrers (trader TEXT PRIMARY KEY, referrer TEXT NOT NULL, block INTEGER NOT NULL, ts INTEGER NOT NULL, tx_hash TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS referral_payouts (
+  tx_hash TEXT NOT NULL, log_index INTEGER NOT NULL, token TEXT, referrer TEXT NOT NULL, trader TEXT NOT NULL, usdg TEXT NOT NULL, block INTEGER NOT NULL, ts INTEGER NOT NULL,
+  PRIMARY KEY (tx_hash, log_index)
+);
+CREATE INDEX IF NOT EXISTS referral_payouts_referrer ON referral_payouts(referrer);
+CREATE TABLE IF NOT EXISTS reward_rounds (id TEXT PRIMARY KEY, token TEXT NOT NULL, root TEXT NOT NULL, total TEXT NOT NULL, expires_at INTEGER NOT NULL, label TEXT NOT NULL, claimed TEXT NOT NULL DEFAULT '0', swept TEXT NOT NULL DEFAULT '0', block INTEGER NOT NULL, ts INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS reward_claims (round_id TEXT NOT NULL, idx TEXT NOT NULL, account TEXT NOT NULL, amount TEXT NOT NULL, tx_hash TEXT NOT NULL, ts INTEGER NOT NULL, PRIMARY KEY (round_id, idx));
 `;
 
 export type Row = Record<string, SQLInputValue>;
@@ -109,4 +119,4 @@ export class Db {
 }
 
 /** Tables rebuilt from `events` by `rebuild()`; `events`, `blocks` and `sync_state` are the durable inputs. */
-export const PROJECTION_TABLES = ["tokens", "trades", "batch_commits", "batch_claims", "balances", "locks", "vesting", "bonds", "floors"] as const;
+export const PROJECTION_TABLES = ["tokens", "trades", "batch_commits", "batch_claims", "balances", "locks", "vesting", "bonds", "floors", "referrers", "referral_payouts", "reward_rounds", "reward_claims"] as const;

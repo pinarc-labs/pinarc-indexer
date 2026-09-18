@@ -39,6 +39,13 @@ Options: `--rpc url,url` (default: the ranked public list), `--from N`, `--chunk
 | `FloorReserve` | `Deposited`, `Redeemed` | `floors`, `tokens.floor_usdg` |
 | `LPLocker` | `Locked`, `Extended`, `Withdrawn`, `LockTransferred` | `locks` (linked to the launch whose pair or token is locked) |
 | `VestingVault` | `ScheduleCreated`, `Released` | `vesting`, `tokens.team_vesting_id` |
+| `FeePolicy` (v2) | `ReferrerBound` | `referrers` |
+| `BondingCurve` v2 | `ReferralPaid` | `referral_payouts` |
+| `RewardsDistributor` (v2) | `RoundCreated`, `Claimed`, `Swept` | `reward_rounds`, `reward_claims` |
+
+Both mainnet factories are watched (v2 `0xA2f9…156d` and the original `0x0cF1…3c5E`); a launch's curve parameters are snapshotted from its own curve, so JULIUSTRUMP keeps its 12,400 USDG threshold while later launches carry 2,500.
+
+One thing the real chain taught the tests: `createToken` emits the curve's `Launched` and the dev-buy `BatchCommitted` **before** `TokenCreated` in the same transaction, so the projection replays a curve's earlier logs of that tx once the token row exists.
 
 Price after a curve trade is the `price` the contract emits; after a batch settlement it is recomputed with the SDK's `price18()` from the stored virtual reserves — the same integer maths as the contract.
 
@@ -55,6 +62,10 @@ Price after a curve trade is the `price` the contract emits; after a batch settl
 | `GET /tokens/:address/candles?tf=5m&limit=300` | OHLCV (`1m 5m 15m 1h 4h 1d`), gaps filled flat |
 | `GET /events?address=&name=&limit=` | the audit log, decoded |
 | `GET /locks?owner=` · `GET /vesting?beneficiary=` | locker / vault rows |
+| `GET /referrals/:wallet` | referees bound to the wallet, its payouts, total USDG earned |
+| `GET /rewards` | reward rounds with claimed / swept totals |
+
+Token rows carry `status` (event-derived: `batch` → `live` → `graduated`) and `phase`, which also turns `live` once the batch window has closed but nobody has settled yet.
 
 ## As a library
 

@@ -54,6 +54,10 @@ export function applyEvent(db: Db, e: StoredEvent) {
       );
       const meta = db.get<{ name: string; symbol: string; metadata_uri: string }>("SELECT name, symbol, metadata_uri FROM token_meta WHERE token = ?", token);
       if (meta) db.run("UPDATE tokens SET name = ?, symbol = ?, metadata_uri = ? WHERE address = ?", meta.name, meta.symbol, meta.metadata_uri, token);
+      // `createToken` emits the curve's Launched (and the dev-buy BatchCommitted) *before* TokenCreated in the same
+      // transaction, so those were no-ops when first applied: replay the curve's earlier logs of this tx now.
+      const earlier = db.all<StoredEvent>("SELECT * FROM events WHERE tx_hash = ? AND address = ? AND source = 'curve' AND log_index < ? ORDER BY log_index", e.tx_hash, curve, e.log_index);
+      for (const prev of earlier) applyEvent(db, prev);
       refreshPrice(db, token);
       return;
     }
@@ -160,6 +164,24 @@ export function applyEvent(db: Db, e: StoredEvent) {
       addBalance(db, e.address, lc(a.to), value);
       return;
     }
+    case "curve.ReferralPaid": {
+      const token = curveToken();
+      db.run("INSERT OR IGNORE INTO referral_payouts (tx_hash, log_index, token, referrer, trader, usdg, block, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", e.tx_hash, e.log_index, token ?? null, lc(a.referrer), lc(a.trader), String(a.amount), e.block, e.ts);
+      return;
+    }
+    case "policy.ReferrerBound":
+      db.run("INSERT OR IGNORE INTO referrers (trader, referrer, block, ts, tx_hash) VALUES (?, ?, ?, ?, ?)", lc(a.trader), lc(a.referrer), e.block, e.ts, e.tx_hash);
+      return;
+    case "rewards.RoundCreated":
+      db.run("INSERT OR IGNORE INTO reward_rounds (id, token, root, total, expires_at, label, block, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", String(a.roundId), lc(a.token), String(a.root), String(a.total), num(a.expiresAt), String(a.label ?? ""), e.block, e.ts);
+      return;
+    case "rewards.Claimed":
+      db.run("INSERT OR IGNORE INTO reward_claims (round_id, idx, account, amount, tx_hash, ts) VALUES (?, ?, ?, ?, ?, ?)", String(a.roundId), String(a.index), lc(a.account), String(a.amount), e.tx_hash, e.ts);
+      db.run("UPDATE reward_rounds SET claimed = CAST(CAST(claimed AS INTEGER) + ? AS TEXT) WHERE id = ?", String(a.amount), String(a.roundId));
+      return;
+    case "rewards.Swept":
+      db.run("UPDATE reward_rounds SET swept = ? WHERE id = ?", String(a.amount), String(a.roundId));
+      return;
     case "token.MetadataUpdated":
       db.run("UPDATE tokens SET metadata_uri = ? WHERE address = ?", String(a.uri), e.address);
       db.run("UPDATE token_meta SET metadata_uri = ? WHERE token = ?", String(a.uri), e.address);
